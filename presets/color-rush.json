@@ -1,0 +1,26 @@
+{
+  "id": "preset_color_rush",
+  "name": "Color Rush",
+  "slug": "color-rush",
+  "category": "action",
+  "version": "1.0.0",
+  "status": "ready",
+  "description": "Tap tiles matching your assigned color before time runs out.",
+  "thumbnailUrl": null,
+  "players": {
+    "min": 1,
+    "max": 4,
+    "colors": ["#ef4444", "#3b82f6", "#22c55e", "#eab308"]
+  },
+  "duration": {
+    "seconds": 60
+  },
+  "scoring": {
+    "type": "points"
+  },
+  "difficultyPresets": {
+    "easy": { "tilesPerSecond": 1 },
+    "medium": { "tilesPerSecond": 2 },
+    "hard": { "tilesPerSecond": 4 }
+  }
+}

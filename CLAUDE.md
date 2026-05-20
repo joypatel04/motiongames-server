@@ -1,4 +1,4 @@
-# CLAUDE.md — arena-server
+# CLAUDE.md — motiongames-server
 
 ## Project Overview
 

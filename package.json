@@ -1,5 +1,5 @@
 {
-  "name": "arena-server",
+  "name": "motiongames-server",
   "version": "0.1.0",
   "description": "On-premise game engine for interactive LED floor arenas",
   "type": "module",
