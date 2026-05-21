@@ -315,9 +315,9 @@ YSAM_SENSOR_EVENT_PORT=7800
 SQLITE_PATH=./data/arena.db        # SQLite file location
 
 # Supabase sync
-SUPABASE_URL=https://agqnqwispnaytefftgpe.supabase.co
-SUPABASE_ANON_KEY=                  # from snooker-club-sass .env
-SHOP_ID=                            # this venue's shop_id
+SUPABASE_URL=https://viunldwxomgqwwnjgkvg.supabase.co
+SUPABASE_ANON_KEY=                  # from Motion Games Supabase project
+SHOP_ID=                            # this venue's venue_id
 
 # Logging
 LOG_LEVEL=info                      # debug | info | warn | error
@@ -342,6 +342,44 @@ npm run test:coverage     # coverage report
 npm run lint
 npm run format
 ```
+
+## Behavior rules
+
+1. **Surgical changes only.** Only modify files, functions, and lines directly
+   related to the current task. Do not refactor, rename, reorganize, or
+   "improve" anything not explicitly requested. If you spot something worth
+   fixing, mention it at the end — don't touch it.
+
+2. **Ask before architectural decisions.** Before choosing an approach that
+   affects the driver interface, game engine loop, WebSocket protocol, or DB
+   schema — present 2-3 options with tradeoffs. Wait for a choice before
+   writing code.
+
+3. **Simplest solution first.** Implement the simplest thing that works. No
+   premature abstractions. The driver plugin system and IGame interface are the
+   only planned abstractions — don't add more unless explicitly asked.
+
+4. **Flag uncertainty explicitly.** If you're not confident about how the MOKA
+   protocol works, how sensor events flow, or how the sync queue operates —
+   say so before proceeding. Wrong assumptions here can brick hardware or
+   corrupt the local DB.
+
+5. **Don't contradict logged decisions.** The architecture decisions doc
+   (`../snooker-club-sass/docs/arena-architecture-decisions.md`) and this file
+   document deliberate choices (e.g., SQLite local-first over direct Supabase,
+   60fps tick loop, games as pure logic). If a task conflicts, flag it.
+
+6. **Confirm before destructive actions.** Before deleting files, changing the
+   ITileDriver interface, altering SQLite migrations, or modifying the
+   WebSocket protocol: list exactly what will be affected and wait for
+   confirmation.
+
+7. **Test-driven when possible.** This repo uses Vitest. For bug fixes, write
+   a failing test first, then fix. For new features, write tests alongside.
+   Run `npm test` before declaring anything done.
+
+8. **Show what changed.** After any coding task, end with: files changed, what
+   was modified (one line per file), and any follow-up needed.
 
 ## Conventions
 
@@ -372,8 +410,8 @@ npm run format
 - `../snooker-club-sass/docs/arena-architecture-decisions.md §22` — MOKA UDP protocol
 - `../snooker-club-sass/docs/arena-architecture-decisions.md §23` — Wireshark capture strategy
 - `../snooker-club-sass/docs/arena-architecture-decisions.md §25` — Ysam protocol reference
-- `../snooker-club-sass/docs/database-architecture.md` — Supabase schema
-- `../snooker-club-sass/types/supabase.ts` — generated DB types
+- `../snooker-club-sass/docs/database-architecture.md` — Supabase schema (Strikee)
+- Motion Games Supabase project: `viunldwxomgqwwnjgkvg` (ap-south-1, "Let's Thrive" org)
 
 ## Build Phases
 

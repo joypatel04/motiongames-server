@@ -7,6 +7,8 @@ import type { SyncQueueRepository } from '@/db/repositories/sync-queue.repo.js';
 import { WhackAMole } from '@/games/whack-a-mole.js';
 import { LavaRun } from '@/games/lava-run.js';
 import { RaceToLight } from '@/games/race-to-light.js';
+import { JsonGameAdapter } from '@/games/json-game-adapter.js';
+import type { GameDefinition } from '@/interpreter/types/game-definition.js';
 import type { Difficulty, IGame, Player, PlayerScore } from '@/games/game.interface.js';
 
 export interface CreateSessionInput {
@@ -27,10 +29,16 @@ export interface SessionManagerDeps {
   scores: ScoresRepository;
   leaderboard: LeaderboardRepository;
   syncQueue: SyncQueueRepository;
-  gameFactory?: (slug: string) => IGame;
+  gameFactory?: (slug: string, definition: string | null) => IGame;
 }
 
-const DEFAULT_GAME_FACTORY = (slug: string): IGame => {
+/**
+ * Create an IGame instance for the given slug. Hardcoded games take
+ * priority; if the slug doesn't match any built-in, fall back to the
+ * JSON-driven interpreter via JsonGameAdapter when a `definition` is
+ * available in the local game catalog.
+ */
+const DEFAULT_GAME_FACTORY = (slug: string, definition: string | null): IGame => {
   switch (slug) {
     case 'whack-a-mole':
       return new WhackAMole();
@@ -38,8 +46,13 @@ const DEFAULT_GAME_FACTORY = (slug: string): IGame => {
       return new LavaRun();
     case 'race-to-light':
       return new RaceToLight();
-    default:
+    default: {
+      if (definition) {
+        const def = JSON.parse(definition) as GameDefinition;
+        return new JsonGameAdapter(def);
+      }
       throw new Error(`Unknown game slug: ${slug}`);
+    }
   }
 };
 
@@ -50,7 +63,7 @@ export class SessionManager {
   private readonly scores: ScoresRepository;
   private readonly leaderboard: LeaderboardRepository;
   private readonly syncQueue: SyncQueueRepository;
-  private readonly gameFactory: (slug: string) => IGame;
+  private readonly gameFactory: (slug: string, definition: string | null) => IGame;
 
   private currentSessionId: string | null = null;
   private currentPlayers: Player[] = [];
@@ -94,7 +107,7 @@ export class SessionManager {
     this.currentGameId = gameRow.id;
     this.currentPlayers = input.players.map((name, index) => ({ index, name }));
 
-    const game = this.gameFactory(input.gameSlug);
+    const game = this.gameFactory(input.gameSlug, gameRow.definition);
     this.engine.loadGame(game, this.currentPlayers, input.difficulty);
     return session;
   }

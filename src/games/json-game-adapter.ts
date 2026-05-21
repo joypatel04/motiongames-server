@@ -7,49 +7,20 @@ import type {
   Player,
   PlayerScore,
 } from './game.interface.js';
-
-/**
- * Minimal slice of a published GameDefinition that the adapter needs. The
- * full type lives in the to-be-ported designer interpreter; this is the
- * subset that drives the high-level tick/lifecycle behavior.
- */
-export interface JsonGameDefinition {
-  id?: string;
-  name?: string;
-  slug?: string;
-  duration?: { seconds?: number };
-  players?: { min?: number; max?: number };
-  phases?: JsonGamePhase[];
-  timeline?: { phases?: JsonGamePhase[] };
-}
-
-export interface JsonGamePhase {
-  id?: string;
-  name?: string;
-  /** Duration in SECONDS (matching designer phase definitions). */
-  duration?: number;
-}
-
-export interface JsonGameAdapterState {
-  ended: boolean;
-  /** Index into the resolved phases array. */
-  currentPhaseIndex: number;
-  /** Phase start time in SECONDS since game start (matching designer state). */
-  phaseStartedAt: number;
-  /** Final scores keyed by player index — populated when ended=true. */
-  scores: Record<number, number>;
-}
-
-const DEFAULT_GAME_OVER_PHASE_DURATION_SEC = 5;
-const FALLBACK_END_DELAY_MS = 2000;
+import type { TileUpdate } from '@/drivers/driver.interface.js';
+import {
+  GameInterpreter,
+  hexToRgb,
+  DEFAULT_TILE_COLOR,
+} from '@/interpreter/index.js';
+import type { GameDefinition } from '@/interpreter/types/game-definition.js';
+import type { GameState } from '@/interpreter/trigger-evaluator.js';
 
 /**
  * Bridges a JSON GameDefinition (published from the designer) into the
- * server's IGame interface. The full interpreter (zone resolver, trigger
- * evaluator, action executor) lands in STR-9; this adapter implements the
- * lifecycle envelope around it and — critically — the game-over phase delay
- * so the winner celebration animation plays out on the floor before the
- * engine marks the session finished.
+ * server's IGame interface. Uses the full GameInterpreter engine ported
+ * from motiongames-designer to evaluate triggers, execute actions, and
+ * produce per-tile color updates each tick.
  */
 export class JsonGameAdapter implements IGame {
   readonly id: string;
@@ -58,138 +29,175 @@ export class JsonGameAdapter implements IGame {
   readonly maxPlayers: number;
   readonly defaultDuration: number;
 
-  private readonly definition: JsonGameDefinition;
+  private readonly definition: GameDefinition;
+  private interpreter!: GameInterpreter;
+  private gameState!: GameState;
   private elapsedMs = 0;
   private endTriggeredAt: number | null = null;
-  private gameState: JsonGameAdapterState = {
-    ended: false,
-    currentPhaseIndex: 0,
-    phaseStartedAt: 0,
-    scores: {},
-  };
   private players: Player[] = [];
+  private grid!: Grid;
+  /** Tracks the last color sent per tile so we only emit diffs. */
+  private lastTileColors: Map<number, string> = new Map();
 
-  constructor(definition: JsonGameDefinition) {
+  constructor(definition: GameDefinition) {
     this.definition = definition;
-    this.id = definition.slug ?? definition.id ?? 'json-game';
+    this.id = (definition as unknown as { slug?: string }).slug ?? definition.id ?? 'json-game';
     this.name = definition.name ?? this.id;
     this.minPlayers = definition.players?.min ?? 1;
     this.maxPlayers = definition.players?.max ?? 8;
     this.defaultDuration = (definition.duration?.seconds ?? 60) * 1000;
   }
 
-  init(_grid: Grid, players: Player[], _difficulty: Difficulty): void {
+  init(grid: Grid, players: Player[], difficulty: Difficulty): void {
+    this.grid = grid;
     this.elapsedMs = 0;
     this.endTriggeredAt = null;
     this.players = players;
-    this.gameState = {
-      ended: false,
-      currentPhaseIndex: 0,
-      phaseStartedAt: 0,
-      scores: Object.fromEntries(players.map((p) => [p.index, 0])),
-    };
-  }
+    this.lastTileColors = new Map();
 
-  /**
-   * Externally signal the game has ended (winner determined). Once called,
-   * `tick()` will continue running until either the game_over phase finishes
-   * or the 2s fallback delay elapses, then return `finished: true`.
-   */
-  endGame(scoresByPlayerIndex?: Record<number, number>): void {
-    if (this.gameState.ended) return;
-    this.gameState.ended = true;
-    if (scoresByPlayerIndex) this.gameState.scores = { ...scoresByPlayerIndex };
-    const phases = this.resolvePhases();
-    const gameOverIdx = phases.findIndex(isGameOverPhase);
-    if (gameOverIdx >= 0) {
-      this.gameState.currentPhaseIndex = gameOverIdx;
-      this.gameState.phaseStartedAt = this.elapsedMs / 1000;
-    } else {
-      this.endTriggeredAt = this.elapsedMs;
+    // Create a grid-adapted copy of the definition that matches the
+    // actual hardware grid, not the grid the game was designed on.
+    const adapted: GameDefinition = {
+      ...this.definition,
+      grid: { rows: grid.rows, cols: grid.cols },
+    };
+
+    this.interpreter = new GameInterpreter(adapted);
+
+    // Map IGame difficulty ('easy'|'medium'|'hard') to the designer's
+    // preset key. Fall through to the raw string if no mapping needed.
+    this.gameState = this.interpreter.buildInitialGameState(difficulty);
+
+    // Seed scores for all players.
+    for (const p of players) {
+      const key = `player${p.index + 1}`;
+      if (!(key in this.gameState.scores)) {
+        this.gameState.scores[key] = 0;
+      }
     }
+
+    // Restrict active players to those actually playing.
+    this.gameState.activePlayers = players.map((p) => `player${p.index + 1}`);
   }
 
   tick(deltaMs: number): GameTickResult {
     this.elapsedMs += deltaMs;
     const events: GameEvent[] = [];
-    // The full interpreter will populate tileUpdates; the skeleton has none.
-    const tileUpdates: GameTickResult['tileUpdates'] = [];
+    const deltaSec = deltaMs / 1000;
 
+    // Advance game time.
+    this.gameState.time += deltaSec;
+
+    // Run the interpreter's time-tick pass (triggers, spawns, phases, etc.).
     if (!this.gameState.ended) {
-      // Without a real interpreter, the only natural end-of-game signal is
-      // the configured duration. Real interpreter wiring (STR-9) will call
-      // endGame() based on win conditions instead.
-      if (this.elapsedMs >= this.defaultDuration) this.endGame();
+      this.interpreter.processTimeTick(this.gameState);
+
+      // Check built-in win condition.
+      const winChange = this.interpreter.checkWinCondition(this.gameState);
+      if (winChange) {
+        events.push({ type: 'win_condition', payload: winChange as unknown as Record<string, unknown> });
+      }
+
+      // Check duration-based end.
+      if (this.interpreter.isGameOver(this.gameState)) {
+        this.gameState.ended = true;
+      }
     }
 
-    if (this.gameState.ended) {
-      const phases = this.resolvePhases();
-      const currentPhase = phases[this.gameState.currentPhaseIndex];
+    // Get the full tile state from the interpreter.
+    const frameState = this.interpreter.getFrameState(this.gameState.time, this.gameState);
 
-      if (currentPhase && isGameOverPhase(currentPhase)) {
-        const phaseElapsed = this.elapsedMs - this.gameState.phaseStartedAt * 1000;
-        const phaseDuration =
-          (currentPhase.duration ?? DEFAULT_GAME_OVER_PHASE_DURATION_SEC) * 1000;
-        if (phaseElapsed >= phaseDuration) {
-          return { tileUpdates, finished: true, events };
-        }
-      } else {
-        if (this.endTriggeredAt === null) this.endTriggeredAt = this.elapsedMs;
-        if (this.elapsedMs - this.endTriggeredAt > FALLBACK_END_DELAY_MS) {
-          return { tileUpdates, finished: true, events };
-        }
+    // Diff against last frame to produce only changed tiles.
+    const tileUpdates: TileUpdate[] = [];
+    for (const tile of frameState) {
+      const color = tile.brightness < 1
+        ? dimHexColor(tile.color, tile.brightness)
+        : tile.color;
+      const prev = this.lastTileColors.get(tile.index);
+      if (prev !== color) {
+        const rgb = hexToRgb(color);
+        tileUpdates.push({ index: tile.index, r: rgb.r, g: rgb.g, b: rgb.b });
+        this.lastTileColors.set(tile.index, color);
+      }
+    }
+
+    // Handle game-over phase delay.
+    if (this.gameState.ended) {
+      if (this.endTriggeredAt === null) {
+        this.endTriggeredAt = this.elapsedMs;
+        events.push({ type: 'game_ended' });
+      }
+      // Give a 3-second celebration window before signaling finished.
+      const GAME_OVER_DELAY_MS = 3000;
+      if (this.elapsedMs - this.endTriggeredAt > GAME_OVER_DELAY_MS) {
+        return { tileUpdates, finished: true, events };
       }
     }
 
     return { tileUpdates, finished: false, events };
   }
 
-  onSensorEvent(_tileIndex: number, _pressed: boolean): void {
-    // No-op until interpreter is ported.
+  onSensorEvent(tileIndex: number, pressed: boolean): void {
+    if (this.gameState.ended) return;
+    if (pressed) {
+      this.interpreter.processSensorEvent(tileIndex, this.gameState);
+    } else {
+      this.interpreter.processSensorRelease(tileIndex, this.gameState);
+    }
   }
 
   getScores(): PlayerScore[] {
-    return this.players.map((p) => ({
-      playerIndex: p.index,
-      name: p.name,
-      score: this.gameState.scores[p.index] ?? 0,
-    }));
+    return this.players.map((p) => {
+      const key = `player${p.index + 1}`;
+      return {
+        playerIndex: p.index,
+        name: p.name,
+        score: this.gameState.scores[key] ?? 0,
+      };
+    });
   }
 
   getState(): Record<string, unknown> {
     return {
       elapsedMs: this.elapsedMs,
       ended: this.gameState.ended,
+      endOutcome: this.gameState.endOutcome,
       currentPhaseIndex: this.gameState.currentPhaseIndex,
       phaseStartedAt: this.gameState.phaseStartedAt,
       endTriggeredAt: this.endTriggeredAt,
+      scores: { ...this.gameState.scores },
+      activeSpawnCount: Object.keys(this.gameState.activeSpawns).length,
     };
   }
 
   cleanup(): void {
     this.elapsedMs = 0;
     this.endTriggeredAt = null;
-    this.gameState = {
-      ended: false,
-      currentPhaseIndex: 0,
-      phaseStartedAt: 0,
-      scores: {},
-    };
+    this.lastTileColors.clear();
   }
 
-  // Test helpers — package-private use only.
+  // ── Test helpers ──────────────────────────────────────────────────
   getElapsedMs(): number {
     return this.elapsedMs;
   }
   getEndTriggeredAt(): number | null {
     return this.endTriggeredAt;
   }
-
-  private resolvePhases(): JsonGamePhase[] {
-    return this.definition.phases ?? this.definition.timeline?.phases ?? [];
+  getGameState(): GameState {
+    return this.gameState;
   }
 }
 
-function isGameOverPhase(p: JsonGamePhase): boolean {
-  return p.id === 'game_over' || p.name === 'game_over';
+// ── Helpers ───────────────────────────────────────────────────────────
+
+/** Apply brightness dimming to a hex color. */
+function dimHexColor(hex: string, brightness: number): string {
+  if (brightness >= 1) return hex;
+  if (brightness <= 0) return '#000000';
+  const rgb = hexToRgb(hex);
+  const r = Math.round(rgb.r * brightness);
+  const g = Math.round(rgb.g * brightness);
+  const b = Math.round(rgb.b * brightness);
+  const c = (v: number) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0');
+  return `#${c(r)}${c(g)}${c(b)}`;
 }

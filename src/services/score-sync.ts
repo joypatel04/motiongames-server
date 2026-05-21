@@ -83,17 +83,32 @@ export class ScoreSync {
 
   private async syncRow(row: SyncRow, supabase: SupabaseClient): Promise<void> {
     const payload = JSON.parse(row.payload) as Record<string, unknown>;
-    const enriched = this.shopId ? { ...payload, arena_id: this.shopId } : payload;
 
     switch (row.table_name) {
       case 'arena_sessions': {
+        // Map local arena_sessions → Supabase arena_play_sessions
+        const sessionRow = {
+          id: payload.id,
+          game_id: payload.game_id,
+          game_slug: payload.game_slug ?? null,
+          game_version: payload.game_version ?? '1.0.0',
+          difficulty: payload.difficulty ?? 'medium',
+          player_count: payload.player_count ?? 1,
+          grid_size: payload.grid_size ?? `${process.env.TILE_ROWS ?? 16}x${process.env.TILE_COLS ?? 12}`,
+          duration_seconds: payload.duration_seconds ?? null,
+          started_at: payload.start_time ?? payload.created_at,
+          ended_at: payload.end_time ?? null,
+          outcome: payload.status === 'completed' ? 'completed' : (payload.status as string) ?? null,
+          stats: payload.metadata ?? null,
+          revenue_amount: payload.total_price ?? null,
+        };
         if (row.operation === 'INSERT') {
-          const { error } = await supabase.from('arena_sessions_cloud').upsert(enriched);
+          const { error } = await supabase.from('arena_play_sessions').upsert(sessionRow);
           if (error) throw error;
         } else {
-          const { id, ...updates } = enriched as { id: unknown } & Record<string, unknown>;
+          const { id, ...updates } = sessionRow;
           const { error } = await supabase
-            .from('arena_sessions_cloud')
+            .from('arena_play_sessions')
             .update(updates)
             .eq('id', id as string);
           if (error) throw error;
@@ -101,7 +116,19 @@ export class ScoreSync {
         break;
       }
       case 'arena_scores': {
-        const { error } = await supabase.from('arena_scores_cloud').upsert(enriched);
+        // Map local arena_scores → Supabase arena_session_players
+        const playerRow = {
+          id: payload.id,
+          session_id: payload.session_id,
+          player_number: payload.rank ?? 1,
+          display_name: payload.display_name,
+          player_profile_id: payload.player_profile_id ?? null,
+          score: payload.score ?? 0,
+          rank: payload.rank ?? null,
+          is_winner: payload.is_winner === 1 || payload.is_winner === true,
+          stats: payload.stats ?? null,
+        };
+        const { error } = await supabase.from('arena_session_players').upsert(playerRow);
         if (error) throw error;
         break;
       }

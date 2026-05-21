@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Arena Floor Simulator</title>
+  <title>Motion Games — Floor Simulator</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -80,7 +80,7 @@
   </style>
 </head>
 <body>
-  <h1>Arena Floor Simulator</h1>
+  <h1>Motion Games — Floor Simulator</h1>
   <div id="status" class="disconnected">Disconnected</div>
   <div id="info-bar">
     <div>Game: <strong id="game-name">—</strong></div>
@@ -159,8 +159,13 @@
     }
 
     function connect() {
+      // WS server runs on a separate port (default 3001).
+      // Accept ?wsPort=XXXX override, otherwise default to 3001.
+      const params = new URLSearchParams(location.search);
+      const wsPort = params.get('wsPort') || '3001';
+      const wsHost = location.hostname || 'localhost';
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${protocol}//${location.host}/ws`;
+      const url = `${protocol}//${wsHost}:${wsPort}`;
       setStatus('Connecting…', 'waiting');
       ws = new WebSocket(url);
 

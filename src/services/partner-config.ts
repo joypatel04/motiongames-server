@@ -15,17 +15,18 @@ export interface PartnerProfile {
   address: string | null;
 }
 
-interface PartnerRow {
+interface VenueRow {
   id: string;
   name: string;
-  slug: string;
-  logo_url: string | null;
-  primary_color: string | null;
-  secondary_color: string | null;
+  address: string | null;
+  venue_avatar_url: string | null;
+  venue_arenas: VenueArenaRow[];
+}
+
+interface VenueArenaRow {
   grid_rows: number | null;
   grid_cols: number | null;
   tile_count: number | null;
-  address: string | null;
 }
 
 export interface LoadPartnerProfileOptions {
@@ -40,7 +41,7 @@ let cachedProfile: PartnerProfile | null = null;
 export function getDefaultPartnerProfile(): PartnerProfile {
   return {
     id: 'default',
-    name: 'Strikee Arena',
+    name: 'Motion Games Arena',
     slug: 'default',
     logoUrl: null,
     primaryColor: '#3b82f6',
@@ -68,45 +69,46 @@ export async function loadPartnerProfile(
     return cachedProfile;
   }
 
-  const slug = options.slug ?? process.env.PARTNER_SLUG;
-  if (!slug) {
-    logger.info('PARTNER_SLUG not set — using default partner profile');
+  const venueId = options.slug ?? process.env.SHOP_ID;
+  if (!venueId) {
+    logger.info('SHOP_ID not set — using default partner profile');
     cachedProfile = getDefaultPartnerProfile();
     return cachedProfile;
   }
 
   const { data, error } = await supabase
-    .from('arena_partners')
-    .select('*')
-    .eq('slug', slug)
+    .from('venues')
+    .select('id, name, address, venue_avatar_url, venue_arenas(grid_rows, grid_cols, tile_count)')
+    .eq('id', venueId)
     .maybeSingle();
 
   if (error) {
-    logger.warn({ slug, error }, 'partner lookup failed — using default partner profile');
+    logger.warn({ venueId, error }, 'venue lookup failed — using default partner profile');
     cachedProfile = getDefaultPartnerProfile();
     return cachedProfile;
   }
 
   if (!data) {
-    logger.warn({ slug }, 'partner not found — using default partner profile');
+    logger.warn({ venueId }, 'venue not found — using default partner profile');
     cachedProfile = getDefaultPartnerProfile();
     return cachedProfile;
   }
 
-  const row = data as PartnerRow;
+  const row = data as VenueRow;
+  const arena = row.venue_arenas?.[0];
   cachedProfile = {
     id: row.id,
     name: row.name,
-    slug: row.slug,
-    logoUrl: row.logo_url,
-    primaryColor: row.primary_color ?? '#3b82f6',
-    secondaryColor: row.secondary_color ?? '#1e40af',
-    gridRows: row.grid_rows ?? 16,
-    gridCols: row.grid_cols ?? 12,
-    tileCount: row.tile_count ?? 192,
+    slug: venueId,
+    logoUrl: row.venue_avatar_url,
+    primaryColor: '#3b82f6',
+    secondaryColor: '#1e40af',
+    gridRows: arena?.grid_rows ?? 16,
+    gridCols: arena?.grid_cols ?? 12,
+    tileCount: arena?.tile_count ?? 192,
     address: row.address,
   };
-  logger.info({ partner: cachedProfile.name, slug: cachedProfile.slug }, 'partner profile loaded');
+  logger.info({ partner: cachedProfile.name, venueId }, 'venue profile loaded');
   return cachedProfile;
 }
 
